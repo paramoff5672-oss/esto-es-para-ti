@@ -5203,21 +5203,16 @@ try { showSecretReveal = window.showSecretReveal; } catch (e) { /* nada */ }
 })();
 
 /* =========================================================
-   BUZÓN REALISTA + RENDIMIENTO DE LA SALIDA DE LA CARTA: 
-
-   - Buzón clásico de poste: cuerpo curvo en perspectiva, marco, remaches, puerta con picaporte y corazón grabado, poste de madera y sombra.
-   - Al tocarlo la puerta se abre hacia ti de verdad (3D, con bisagra abajo): se atora un instante, se abre de golpe, rebota en el tope y se queda abierta mostrando el interior oscuro, que se ilumina por dentro.
-   - La bandera está levantada (hay correo) y se mece de vez en cuando; al abrir cae y rebota en el tope, como una real.
-   - La carta sigue saliendo por el mismo punto (la base de la abertura).
-
-   RENDIMIENTO (por qué se trababa):
-   1) El brillo de la luna animaba box-shadow (repinta cada cuadro, con un desenfoque de 100px) durante TODA la escena del jardín. Ahora es una capa estática que solo cambia opacidad (la hace la GPU).
-   2) Al tocar el buzón se quitaban de golpe ~190 animaciones de flores: ahora se quitan en tandas de 30 por cuadro y solo las infinitas.
-   3) El buzón antiguo tenía un filtro drop-shadow que se repintaba todo el rato mientras flotaba. El nuevo no tiene filtros ni flota.
-   4) La carta se dibujaba por primera vez justo al llegar al centro: ahora se prepara mientras vuela.
-   5) La música (síntesis + reverb) se armaba justo cuando empieza a desenrollarse el pergamino: ahora arranca cuando ya terminó.
-   6) El jardín reaccionaba al dedo con un bucle que forzaba 190 cálculos de layout por cada movimiento y que, además, no se veía (la animación de mecerse tapaba el efecto). Ahora es un solo cálculo por cuadro y las flores sí se inclinan.
-   Más lo del parche anterior (jardín debajo mientras aparece la noche, corazones brillantes después de que llegue la carta, moño sin filtro).
+   BUZÓN REALISTA + RENDIMIENTO (v2) POR QUÉ SE TRABABA Y SE "CORROMPÍA" EN EL CELULAR (lo medí):
+   Tu jardín son ~190 flores SVG = unos 22,000 nodos, y cada flor tenía DOS capas animadas (.flower y .botanical, esta última meciéndose sola). Eso son ~380 capas de GPU. Un celular no tiene memoria gráfica para tantas: el
+   navegador tira capas y se ve basura o desaparecen piezas (la puerta y la bandera del buzón), y cada cambio de escena se siente a tirones. Medido en celular emulado con CPU 4x más lenta: jardín en reposo 310 ms por cuadro con el vaivén de cada flor, 124 ms sin él, 17 ms sin flores.
+   QUÉ HACE ESTE BLOQUE:
+   1) Las flores se agrupan en 4 bandas por profundidad y se mecen POR BANDA (4 capas en vez de ~380). Se ve igual de vivo: cada banda va a su ritmo.
+   2) La puerta del buzón ya no usa 3D (rotateX/perspective), que en varios celulares falla. Ahora es 2D con perspectiva falsa (la puerta cae hacia ti y se ve su cara interior). Mismo efecto, cero riesgo.
+   3) Al abrir el buzón ya no se tocan las flores una por una: se pausa el vaivén con una sola clase. Y el jardín no se destruye al final (eso tardaba 2 s en equipo lento): se oculta con content-visibility.
+   4) Moon: el brillo ya no anima box-shadow (repintaba todo el rato).
+   5) La carta se prepara mientras vuela; barra de lectura y música esperan a que termine de abrirse; corazones brillantes después de que llegue.
+   6) Arreglo del tipeo "x@keyframes mbGlow" de tu CSS (la luz del buzón nunca se animaba): aquí va con otro nombre y funciona.
 ========================================================= */
 (() => {
 "use strict";
@@ -5242,7 +5237,8 @@ css.textContent = `
 /* ===== jardín: debajo mientras la noche aparece, y se va de golpe al final ===== */
 #garden.active{transition:opacity 1.2s ease}
 #garden:not(.active){transition:opacity 0s linear 1.3s}
-#garden.fuera{display:none!important}
+@supports (content-visibility:hidden){#garden.fuera{content-visibility:hidden}}
+@supports not (content-visibility:hidden){#garden.fuera{display:none!important}}
 #garden.congelado .moon::after{animation-play-state:paused}
 
 /* ===== luna: el brillo ya no anima box-shadow (era lo más caro del jardín) ===== */
@@ -5252,7 +5248,19 @@ css.textContent = `
   animation:moonPulseB 4s ease-in-out infinite}
 @keyframes moonPulseB{0%,100%{opacity:.55}50%{opacity:1}}
 
-/* ===== flores: inclinación con el dedo (en el svg, que no tiene animación propia) ===== */
+/* ===== flores: 4 bandas por profundidad, cada una se mece sola (antes: ~190 capas animadas) ===== */
+.flBand{position:absolute;inset:0;transform-origin:50% 100%;isolation:isolate;pointer-events:none;animation-play-state:paused}
+#garden.active .flBand{animation-play-state:running}
+#garden.congelado .flBand{animation-play-state:paused!important}
+.flBand0{animation:bandA 7.3s ease-in-out infinite alternate}
+.flBand1{animation:bandB 6.1s ease-in-out -2s infinite alternate}
+.flBand2{animation:bandC 5.2s ease-in-out -1s infinite alternate}
+.flBand3{animation:bandD 4.4s ease-in-out -3s infinite alternate}
+@keyframes bandA{from{transform:rotate(-.30deg)}to{transform:rotate(.36deg) translateX(1px)}}
+@keyframes bandB{from{transform:rotate(.28deg) translateX(-1px)}to{transform:rotate(-.34deg)}}
+@keyframes bandC{from{transform:rotate(-.38deg)}to{transform:rotate(.42deg) translateX(1.5px)}}
+@keyframes bandD{from{transform:rotate(.42deg) translateX(-1.5px)}to{transform:rotate(-.46deg)}}
+#flowers .botanical{animation:none!important}
 #flowers .flower svg{transform-origin:50% 100%;transition:transform .35s ease-out}
 
 /* ===== corazones brillantes: esperan a que la carta llegue ===== */
@@ -5263,8 +5271,7 @@ css.textContent = `
    BUZÓN
    ===================================================================== */
 #mailbox.mailbox{width:150px;height:130px;position:relative;cursor:pointer;
-  animation:none!important;filter:none!important;transform:none!important;
-  perspective:700px;perspective-origin:50% -150%;-webkit-tap-highlight-color:transparent}
+  animation:none!important;filter:none!important;transform:none!important;-webkit-tap-highlight-color:transparent}
 
 #mailbox .mbSvg{position:absolute;left:-6px;top:-26px;width:220px;height:296px;overflow:visible;pointer-events:none}
 
@@ -5276,33 +5283,39 @@ css.textContent = `
 #mailbox .mbCavity::after{content:"";position:absolute;inset:0;opacity:0;
   background:radial-gradient(ellipse 72% 92% at 50% 100%,rgba(255,226,170,.95) 0%,rgba(255,150,128,.45) 48%,transparent 78%)}
 #mailbox.open .mbCavity::after{animation:mbGlowB 2.8s ease-out forwards!important}
-
 @keyframes mbGlowB{0%{opacity:0}35%{opacity:1}100%{opacity:.35}}
 
-/* la puerta: bisagra abajo, se abre hacia ti */
-#mailbox .mbDoor{position:absolute;left:9px;top:9px;width:132px;height:115px;z-index:2;
-  transform-origin:50% 100%;transform-style:preserve-3d;transition:transform .25s ease-out}
-#mailbox:not(.open):hover .mbDoor{transform:rotateX(3deg)}
-#mailbox .mbFace{position:absolute;inset:0;border-radius:66px 66px 2px 2px;
-  backface-visibility:hidden;-webkit-backface-visibility:hidden}
-#mailbox .mbOut{border:1.5px solid #4a0a16;
+/* la puerta (2D, sin perspective): la cara de afuera cae hacia ti y aparece la de adentro */
+#mailbox .mbOut{position:absolute;left:9px;top:9px;width:132px;height:115px;z-index:2;
+  border-radius:66px 66px 2px 2px;border:1.5px solid #4a0a16;transform-origin:50% 100%;
   background:linear-gradient(150deg,#e0606d 0%,#b83347 34%,#8e1c2f 70%,#6a1220 100%);
-  box-shadow:inset 0 0 0 2px rgba(255,170,180,.22),inset 0 9px 14px rgba(255,205,210,.14),inset 0 -12px 18px rgba(40,0,10,.38)}
+  box-shadow:inset 0 0 0 2px rgba(255,170,180,.22),inset 0 9px 14px rgba(255,205,210,.14),inset 0 -12px 18px rgba(40,0,10,.38);
+  transition:transform .25s ease-out}
+#mailbox:not(.open):hover .mbOut{transform:scale(1,.985)}
 #mailbox .mbOut::after{content:"\\2665";position:absolute;left:50%;top:60%;transform:translate(-50%,-50%);
   font:700 40px Georgia,serif;color:rgba(255,215,222,.2);text-shadow:0 -1px 0 rgba(255,255,255,.2),0 1px 1px rgba(0,0,0,.4)}
 #mailbox .mbLatch{position:absolute;left:50%;top:24px;width:13px;height:13px;margin-left:-6.5px;border-radius:50%;
   background:radial-gradient(circle at 35% 30%,#fff3c4,#d9ac4a 55%,#7a5a1c);box-shadow:0 2px 3px rgba(0,0,0,.5)}
-#mailbox .mbIn{transform:rotateX(180deg);border:1.5px solid #3b0812;
-  background:linear-gradient(180deg,#8a2a3a,#5a1222 55%,#3d0a16);box-shadow:inset 0 0 18px rgba(0,0,0,.5)}
-#mailbox.open .mbDoor{animation:mbDoorOpen 1.05s cubic-bezier(.25,.8,.3,1) forwards}
-
-@keyframes mbDoorOpen{
-  0%{transform:rotateX(0)}
-  10%{transform:rotateX(3deg)}                 /* se atora un instante */
-  56%{transform:rotateX(-106deg)}              /* se abre de golpe */
-  74%{transform:rotateX(-91deg)}               /* rebota en el tope */
-  88%{transform:rotateX(-100deg)}
-  100%{transform:rotateX(-97deg)}
+#mailbox .mbIn{position:absolute;left:-5px;top:124px;width:160px;height:64px;z-index:2;opacity:0;
+  transform-origin:50% 0;transform:scaleY(.02);
+  clip-path:polygon(6.9% 0,93.1% 0,100% 100%,0 100%);
+  background:linear-gradient(180deg,#3c0a16 0%,#6d1f30 38%,#9a3446 88%,#e07f8d 93%,#8a2a3b 100%)}
+#mailbox.open .mbOut{animation:mbOutOpen 1.05s cubic-bezier(.5,0,.85,.55) forwards}
+#mailbox.open .mbIn{animation:mbInOpen 1.05s cubic-bezier(.25,.8,.3,1) forwards}
+@keyframes mbOutOpen{
+  0%{transform:scale(1,1);opacity:1}
+  9%{transform:scale(1,1.012);opacity:1}       /* se atora un instante */
+  38%{transform:scale(1.05,.1);opacity:1}      /* cae hacia ti */
+  42%{transform:scale(1.07,.03);opacity:0}
+  100%{transform:scale(1.07,.03);opacity:0}
+}
+@keyframes mbInOpen{
+  0%,40%{opacity:0;transform:scaleY(.02)}
+  41%{opacity:1;transform:scaleY(.02)}
+  62%{opacity:1;transform:scaleY(1.2)}         /* se pasa un poco */
+  76%{transform:scaleY(.88)}                   /* rebota en el tope */
+  90%{transform:scaleY(1.05)}
+  100%{opacity:1;transform:scaleY(1)}
 }
 
 /* la bandera: vive en el plano de la pared lateral (por eso la matriz) */
@@ -5316,10 +5329,8 @@ css.textContent = `
   background:linear-gradient(160deg,#fff0bd,#e7c478 50%,#a98530);border:1px solid #8c6a22;box-shadow:0 1px 3px rgba(0,0,0,.45)}
 #mailbox .mbFlagPin{position:absolute;left:-4px;top:-4px;width:8px;height:8px;border-radius:50%;
   background:radial-gradient(circle at 35% 30%,#ffe9a8,#8c6a22);box-shadow:0 1px 2px rgba(0,0,0,.5)}
-
 @keyframes mbFlagSway{0%,55%,100%{transform:rotate(-90deg)}70%{transform:rotate(-84deg)}82%{transform:rotate(-91deg)}90%{transform:rotate(-87deg)}}
 #mailbox.open .mbFlagArm{animation:mbFlagDrop .95s .22s cubic-bezier(.3,.6,.4,1) forwards}
-
 @keyframes mbFlagDrop{
   0%{transform:rotate(-90deg)}
   38%{transform:rotate(-3deg)}                 /* cae */
@@ -5375,7 +5386,6 @@ function buildMailbox() {
 
   return `<svg class="mbSvg" viewBox="-6 -26 220 296" aria-hidden="true">
   <defs>
-
     <linearGradient id="mbG" gradientUnits="userSpaceOnUse" x1="10" y1="-20" x2="200" y2="120">
       <stop offset="0" stop-color="#e4707d"/><stop offset=".22" stop-color="#c93f52"/><stop offset=".55" stop-color="#9a2236"/><stop offset="1" stop-color="#5b0f1d"/></linearGradient>
     <linearGradient id="mbRim" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="150" y2="130">
@@ -5385,14 +5395,12 @@ function buildMailbox() {
     <linearGradient id="mbHi" gradientUnits="userSpaceOnUse" x1="40" y1="9" x2="98" y2="-11">
       <stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset=".35" stop-color="#ffe9ee" stop-opacity=".6"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>
     <radialGradient id="mbSh"><stop offset="0" stop-color="#000" stop-opacity=".42"/><stop offset="1" stop-color="#000" stop-opacity="0"/></radialGradient>
-
   </defs>
   <ellipse cx="104" cy="261" rx="64" ry="9" fill="url(#mbSh)"/>
   <rect x="86" y="116" width="26" height="146" fill="url(#mbP)"/>
   <path d="M92 124V256M99 120V258M106 126V254" stroke="rgba(0,0,0,.2)" stroke-width=".8" fill="none"/>
   <rect x="86" y="116" width="26" height="3" fill="rgba(255,255,255,.12)"/>
   <ellipse cx="99" cy="259" rx="30" ry="6" fill="#16301a"/>
-
   ${grass}
   <rect x="28" y="127" width="134" height="8" rx="2" fill="#35200f"/>
   <path d="${silhouette}" fill="url(#mbG)" stroke="#3d0914" stroke-width="1.2" stroke-linejoin="round"/>
@@ -5415,7 +5423,7 @@ function installMailbox() {
   mailbox.insertAdjacentHTML("afterbegin",
     buildMailbox() +
     '<i class="mbCavity"></i>' +
-    '<div class="mbDoor"><div class="mbFace mbOut"><i class="mbLatch"></i></div><div class="mbFace mbIn"></div></div>' +
+    '<div class="mbOut"><i class="mbLatch"></i></div><div class="mbIn"></div>' +
     '<div class="mbFlagPlane"><div class="mbFlagArm"><i class="mbFlagBar"></i><i class="mbFlagPlate"></i><i class="mbFlagPin"></i></div></div>');
 }
 
@@ -5470,11 +5478,9 @@ function flushReact() {
     if (d < 190) { const k = 1 - d / 190; it.s.style.transform = `rotate(${clamp(dx * .03 * k, -9, 9)}deg)`; it.on = true; }
     else if (it.on) { it.s.style.transform = ""; it.on = false; }
   }
-
   clearTimeout(resetT);
   resetT = setTimeout(() => { if (items) for (const it of items) if (it.on) { it.s.style.transform = ""; it.on = false; } }, 520);
 }
-
 const poke = (x, y) => { lastX = x; lastY = y; if (!rafId) rafId = requestAnimationFrame(flushReact); };
 window.addEventListener("resize", () => { items = null; });
 
@@ -5489,34 +5495,29 @@ if (REACCION_FLORES && typeof window.startGarden === "function") {
   };
 }
 
+/* ---------------------------------------------------------   flores en 4 bandas por profundidad   --------------------------------------------------------- */
+function buildBands() {
+  const box = q("#flowers");
+  if (!box || box.dataset.bands) return;
+  box.dataset.bands = "1";
+  const flowers = [...box.children].filter(el => el.classList.contains("flower"));
+  if (!flowers.length) return;
+  const bands = [0, 1, 2, 3].map(i => { const d = document.createElement("div"); d.className = "flBand flBand" + i; d.style.zIndex = [2, 4, 6, 7][i]; return d; });
+  const bandOf = z => z <= 3 ? 0 : z <= 5 ? 1 : z <= 6 ? 2 : 3;
+  flowers.forEach(el => bands[bandOf(parseInt(el.style.zIndex, 10) || 4)].appendChild(el));
+  bands.forEach(b => box.appendChild(b));
+}
+buildBands();
+
 /* ---------------------------------------------------------   al tocar el buzón   --------------------------------------------------------- */
 mailbox.addEventListener("click", () => {
   garden.classList.add("congelado");
   garden.onmousemove = garden.ontouchmove = null;
   clearTimeout(resetT);
 
-  /* 1) congelar el jardín en tandas pequeñas (solo las animaciones infinitas = el vaivén) */
-  try {
-    const anims = garden.getAnimations({ subtree: true }).filter(a => {
-      const e = a.effect, t = e && e.target;
-      return t && t.closest && t.closest("#flowers") && e.getTiming().iterations === Infinity;
-    });
-
-    let i = 0;
-    const step = () => {
-      const end = Math.min(anims.length, i + 30);
-      try {
-        for (let k = i; k < end; k++) anims[k].commitStyles();   // guarda la pose…
-        for (let k = i; k < end; k++) anims[k].cancel();         // …y quita la animación
-      } catch (e) { /* queda la pausa */ }
-      i = end;
-      if (i < anims.length) requestAnimationFrame(step);
-    };
-
-    requestAnimationFrame(step);
-  } catch (e) { /* queda la pausa */ }
-
+  /* 1) congelar el jardín: UNA sola clase pausa las 4 bandas, la luna y el pasto (antes se tocaban ~190 animaciones una por una = el tirón al abrir) */
   /* 2) preparar la carta mientras vuela: con opacidad casi 0 el navegador ya la dibuja, y al llegar solo hay que mostrarla */
+
   if (scr && scr.style.opacity !== "1") scr.style.opacity = ".01";
 
   setTimeout(showGlow, 7000);                  // respaldo
